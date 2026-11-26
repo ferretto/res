@@ -1,7 +1,7 @@
 // Tests for init-kb.mjs and check-kb.mjs. No dependencies.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, test } from 'node:test';
@@ -345,6 +345,32 @@ test('build-report degrades when screens, flows and images are missing', () => {
   assert.match(html, /No screenshot in the evidence/);
   assert.doesNotMatch(html, /<section id="flows"/);
   assert.doesNotMatch(html, /<section id="screens"/);
+});
+
+test('build-report never embeds images from outside the KB', () => {
+  const marker = 'OUTSIDE-THE-KB';
+  mkdirSync(join(dir, 'private'));
+  writeFileSync(join(dir, 'private', 'secret.png'), marker);
+  symlinkSync(join(dir, 'private', 'secret.png'), join(kb, 'evidence', 'EV-009-link.png'));
+  write('screens/S-001-board.md', '# S-001 Board\n\n![a](../../private/secret.png)\n![b](/etc/hosts.png)\n![c](../evidence/EV-009-link.png)\n\n## Not tested\n- Drag.\n');
+  const out = join(dir, 'report.html');
+  const result = run('build-report.mjs', kb, '--out', out);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const html = readFileSync(out, 'utf8');
+  assert.ok(!html.includes(Buffer.from(marker).toString('base64')), 'a file outside the KB was embedded');
+});
+
+test('pack-kb leaves symbolic links out of the zip', () => {
+  mkdirSync(join(dir, 'private'));
+  writeFileSync(join(dir, 'private', 'key.txt'), 'PRIVATE KEY');
+  symlinkSync(join(dir, 'private', 'key.txt'), join(kb, 'evidence', 'EV-010-key.txt'));
+  symlinkSync(join(dir, 'private'), join(kb, 'topics', 'linked-dir'));
+  const out = join(dir, 'handoff.zip');
+  const result = run('pack-kb.mjs', kb, '--out', out, '--force');
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /Left out 2 symbolic link/);
+  const zip = readZip(out);
+  assert.ok(!zip.names.some((name) => name.includes('EV-010') || name.includes('linked-dir')), zip.names.join(', '));
 });
 
 test('pack-kb refuses a KB with errors unless --force', () => {

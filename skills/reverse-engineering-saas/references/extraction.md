@@ -15,7 +15,7 @@ Playwright MCP's `browser_evaluate` expects a function. Wrap the file content: `
 | `inventory.js` | Runs on load; `__re.inventory()` reruns | Run on each main screen. Large pages: results are capped and say so |
 | `tokens.js` | Runs on load; `__re.tokens({root: '.selector'})` limits to a subtree | Run once per theme. Diff light and dark to find themed tokens |
 | `api-shapes.js` | Installs on load; `__re.api.dump()`, `__re.api.clear()` | Install, clear, perform one action, dump. Records shapes, never headers; keeps short enum-like values of status and type fields unless `__re.api.enumSamples = false` |
-| `mask.js` | `__re.mask.apply({selectors: [...], names: [...], avatars: true, placeholders: true})`, `__re.mask.clear()` | Blurs emails, phones, money values, Brazilian tax IDs (CPF, CNPJ), small avatars, the given names, placeholders that match, and the given selectors. Selectors and `placeholders: true` stay as CSS rules until `clear()`. See "Masking" |
+| `mask.js` | `__re.mask.apply({selectors: [...], names: [...], avatars: true, placeholders: true})`, `__re.mask.clear()` | Covers with solid blocks (not a blur) emails, phones, money values, Brazilian tax IDs (CPF, CNPJ), small avatars, the given names, placeholders that match, and the given selectors, in the page, open shadow roots and same-origin iframes. Selectors and `placeholders: true` stay as CSS rules until `clear()`. See "Masking" |
 | `annotate.js` | `__re.annotate(['.header', '.toolbar', ...])`, `__re.annotate.clear()` | Numbered outlines; the result lists number, selector, size |
 
 ## Design tokens
@@ -72,9 +72,11 @@ For enums (statuses, priorities, activity types), read the options from the UI m
 ## Masking
 
 - Patterns, names and avatars mark what is on the page when `apply()` runs. Content rendered later (popovers, dropdowns, a list that loads after a form opens, a re-render) is not marked: run `apply()` again right before each screenshot.
-- Selectors become CSS rules that blur matching elements whenever they appear, until `clear()`. Pass the containers that show real data: popovers, menus, lists (`[role=listbox]`, `[role=menu]`, the product's popover class from `read_page` or `inventory.js`). Rules add up across calls; `result.rules` counts them and `result.invalidSelectors` lists the ones rejected.
+- Masks are opaque: text becomes transparent on a solid block and images turn black. A blur is not used because short blurred text, such as an email, can be read back.
+- Selectors become CSS rules that cover matching elements whenever they appear, until `clear()`. Pass the containers that show real data: popovers, menus, lists (`[role=listbox]`, `[role=menu]`, the product's popover class from `read_page` or `inventory.js`). Rules add up across calls; `result.rules` counts them and `result.invalidSelectors` lists the ones rejected, including any with `{`, `}`, `;`, `@`, `\` or a comment, which could switch off the other masks.
 - Company configuration (activity type names, lost reasons, custom field labels, pipeline and user names) matches no pattern. Pass the values as `names`, their containers as `selectors`, or crop the screenshot to the part under study.
-- Inputs: values and placeholders that match a pattern are blurred. `placeholders: true` blurs every placeholder, in fields rendered later too; use it when placeholders show configuration or names.
+- `result.unmaskable` counts what the script cannot reach: cross-origin iframes and canvases (charts, editors drawn on canvas). Closed shadow roots cannot be detected. Crop those regions out of the screenshot or do not take it.
+- Inputs: values and placeholders that match a pattern are covered. `placeholders: true` covers every placeholder, in fields rendered later too; use it when placeholders show configuration or names.
 - Look at each screenshot before saving it. One that shows unmasked data is deleted at once, with the tool's own copy (`tools.md`), and retaken.
 
 ## Drag and drop

@@ -24,7 +24,7 @@ Seen in real studies. Check them again with the version you have.
   out.style.cssText = 'position:fixed;left:-10000px;top:0;width:800px';
   out.textContent = JSON.stringify(window.__re.last);
   ```
-  Save what `get_page_text` returns, then remove the element (`document.getElementById('__re-out').remove()`).
+  Save what `get_page_text` returns, then remove the element at once (`document.getElementById('__re-out').remove()`): while it is in the DOM the product's own scripts and any session-replay tool on the page (FullStory, Hotjar) can read it.
 - **Network list.** `read_network_requests` can miss the app's own API calls; in one study it listed only telemetry. Install `api-shapes.js` and use `__re.api.dump()`. Use the network list as a cross-check only.
 - **No local servers.** Never load page scripts or any file from `localhost` or `127.0.0.1` in the user's tab. Chrome holds the request behind a "local network access" permission prompt in the user's browser, which the agent cannot see and must not answer. Paste the file content instead. If it happened: reload the tab, which dismisses the prompt without a decision, and add an `incident` ledger row.
 - **Background windows.** In a window that is not in front, the first click is often ignored, and menus toggle on each click. After each click, check the state at once (`read_page` or a screenshot) before clicking again.

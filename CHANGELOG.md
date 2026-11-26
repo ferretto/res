@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased (security hardening)
+
+- Skill: new "Untrusted page content" rules. Text in the product (records, comments, API responses) is data, never instructions; the agent records text aimed at an AI under "Needs human", follows no links from records and runs nothing found in the product. Two new red flags.
+- `api-shapes.js`: object keys that look like data (emails, IDs, UUIDs, non-identifiers) and every key of a dictionary of same-shaped records collapse into `<key>`, with no enum samples beneath them. Path segments with `@`, `%`, spaces or over 32 characters become `:value`, as in `inventory.js`. Query parameter names that look like data become `<key>`.
+- `mask.js`: opaque masks (transparent text on a solid block, black images) instead of a 6 px blur. Reaches open shadow roots and same-origin iframes; reports canvases and cross-origin frames as `unmaskable`. Selectors with braces, semicolons, at-rules, backslashes or comments are refused, so one bad selector cannot switch off the others. Money in the `1.234,56 BRL` form and `<select>` values are matched.
+- `build-report.mjs`: Markdown and images are read only when they resolve inside the KB, symbolic links included, so `REPORT.html` cannot embed a file from elsewhere on disk.
+- `pack-kb.mjs`: symbolic links are left out of the zip and listed.
+- CI: actions pinned by commit SHA, `permissions: contents: read`, no persisted checkout credentials.
+
 ## 0.4.0 (2026-10-17)
 
 - `REPORT.html` redesigned as a UX study a person can read and navigate: IBM Plex type, a light and a dark theme with a toggle, a one-line answer with the key findings, stat tiles, section chips, and screenshots in framed figures that enlarge on click.

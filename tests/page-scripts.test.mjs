@@ -36,6 +36,16 @@ before(async () => {
     if (url.pathname === '/') return route.fulfill({ contentType: 'text/html', body: readFileSync(join(here, 'fixture.html'), 'utf8') });
     if (url.pathname.startsWith('/api/v2/tasks/')) return route.fulfill({ json: TASK });
     if (url.pathname === '/graphql') return route.fulfill({ json: { data: { updateTask: { id: '86abc1234', status: 'done' } } } });
+    if (url.pathname.startsWith('/api/v2/users/')) {
+      const member = (role) => ({ id: 7, role, last_seen: 1791945176083 });
+      return route.fulfill({
+        json: {
+          byEmail: { 'maria@cliente.com.br': member('admin'), 'joao@cliente.com.br': member('member') },
+          byName: { Ana: member('admin'), Bruno: member('member'), Carla: member('member'), Davi: member('guest'), Elisa: member('member') },
+          settings: { theme: 'dark', density: 'compact' },
+        },
+      });
+    }
     if (url.pathname.startsWith('/api/v2/lists/')) return route.fulfill({ json: { tasks: [TASK, { ...TASK, id: '86abc9999', status: 'done' }] } });
     return route.fulfill({ status: 404, body: '' });
   });
@@ -131,14 +141,19 @@ test('api-shapes records endpoint templates and shapes without values', async ()
   assert.equal(await page.evaluate(() => window.__re.api), undefined);
 });
 
-test('mask blurs personal data and clear removes it', async () => {
+test('mask covers personal data with solid blocks and clear removes it', async () => {
   const result = await page.evaluate(script('mask.js'));
   assert.ok(result.byReason.email >= 1);
   assert.ok(result.byReason.phone >= 1);
   assert.ok(result.byReason.money >= 1);
   assert.equal(result.byReason.avatar, 1);
-  const filter = await page.evaluate(() => getComputedStyle(document.querySelector('.contact')).filter);
-  assert.match(filter, /blur/);
+  const contact = await page.evaluate(() => {
+    const style = getComputedStyle(document.querySelector('.contact'));
+    return { color: style.color, background: style.backgroundColor, filter: style.filter };
+  });
+  assert.equal(contact.color, 'rgba(0, 0, 0, 0)', 'masked text is transparent');
+  assert.equal(contact.background, 'rgb(17, 17, 17)', 'masked text sits on a solid block, not a blur');
+  assert.doesNotMatch(contact.filter, /blur/);
   const dateMasked = await page.evaluate(() => document.querySelector('.date').classList.contains('__re-masked'));
   assert.equal(dateMasked, false, 'ISO dates are not phone numbers');
   const named = await page.evaluate(() => window.__re.mask.apply({ names: ['Review PR'] }));
@@ -172,16 +187,59 @@ test('mask rules cover elements rendered later, and placeholders', async () => {
     later.id = 'later';
     later.placeholder = 'Activity type: Visit';
     document.body.append(popover, later);
-    return getComputedStyle(popover).filter;
+    return getComputedStyle(popover).backgroundColor;
   });
-  assert.match(popoverFilter, /blur/, 'a popover rendered after apply() is blurred');
+  assert.equal(popoverFilter, 'rgb(17, 17, 17)', 'a popover rendered after apply() is covered');
   assert.equal(await placeholderColor('later'), 'rgba(0, 0, 0, 0)');
 
   await page.evaluate(() => window.__re.mask.clear());
-  assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.popover')).filter), 'none');
+  assert.notEqual(await page.evaluate(() => getComputedStyle(document.querySelector('.popover')).backgroundColor), 'rgb(17, 17, 17)');
   assert.notEqual(await placeholderColor('later'), 'rgba(0, 0, 0, 0)');
   assert.deepEqual(await page.evaluate(() => window.__re.mask.rules), { selectors: [], placeholders: false });
   await page.evaluate(() => document.querySelectorAll('#owner, #later, .popover').forEach((element) => element.remove()));
+});
+
+test('api-shapes keeps emails out of paths and data out of object keys', async () => {
+  await page.evaluate(script('api-shapes.js'));
+  await page.evaluate(() => window.__re.api.clear());
+  await page.evaluate(() => fetch('/api/v2/users/maria@cliente.com.br/members?joao@cliente.com.br=1&page=2'));
+  await page.waitForFunction(() => window.__re.api.count() >= 1);
+  const [entry] = await page.evaluate(() => window.__re.api.dump());
+  assert.equal(entry.url, '/api/v2/users/:value/members?<key>&page');
+  assert.deepEqual(Object.keys(entry.response.byEmail).sort(), ['<key>', '…keys']);
+  assert.deepEqual(Object.keys(entry.response.byName).sort(), ['<key>', '…keys'], 'a dictionary keyed by names collapses');
+  assert.equal(entry.response.byName['<key>'].last_seen, 'number<epoch-ms>');
+  assert.deepEqual(Object.keys(entry.response.settings).sort(), ['density', 'theme'], 'ordinary keys are kept');
+  assert.equal(entry.enumSamples['response.byName.<key>.role'], undefined, 'no enum samples under data keys');
+  const text = JSON.stringify(entry);
+  for (const secret of ['maria', 'joao', 'Ana', 'Bruno', 'Elisa']) assert.ok(!text.includes(secret), `value leaked: ${secret}`);
+  await page.evaluate(() => window.__re.api.uninstall());
+});
+
+test('mask reaches open shadow roots, refuses selectors that break the stylesheet, reports canvases', async () => {
+  await page.evaluate(() => {
+    const host = document.createElement('div');
+    host.id = 'shadow-host';
+    host.attachShadow({ mode: 'open' }).innerHTML = '<span class="inside">maria@cliente.com.br</span>';
+    const canvas = document.createElement('canvas');
+    canvas.id = 'chart';
+    canvas.width = 300;
+    canvas.height = 150;
+    document.querySelector('main').append(host, canvas);
+  });
+  const result = await page.evaluate(script('mask.js'));
+  assert.ok(result.roots >= 2, 'the shadow root is visited');
+  const inside = await page.evaluate(() => getComputedStyle(document.getElementById('shadow-host').shadowRoot.querySelector('.inside')).backgroundColor);
+  assert.equal(inside, 'rgb(17, 17, 17)', 'text inside an open shadow root is covered');
+  assert.equal(result.unmaskable?.canvases, 1);
+  const bad = await page.evaluate(() => window.__re.mask.apply({ selectors: ['.popover /*', '.a{}', '.ok'] }));
+  assert.deepEqual(bad.invalidSelectors, ['.popover /*', '.a{}']);
+  const still = await page.evaluate(() => getComputedStyle(document.querySelector('.contact')).backgroundColor);
+  assert.equal(still, 'rgb(17, 17, 17)', 'earlier masks survive a rejected selector');
+  await page.evaluate(() => window.__re.mask.clear());
+  const cleared = await page.evaluate(() => getComputedStyle(document.getElementById('shadow-host').shadowRoot.querySelector('.inside')).backgroundColor);
+  assert.notEqual(cleared, 'rgb(17, 17, 17)', 'clear() also cleans shadow roots');
+  await page.evaluate(() => document.querySelectorAll('#shadow-host, #chart').forEach((element) => element.remove()));
 });
 
 test('annotate outlines regions and reports missing selectors', async () => {

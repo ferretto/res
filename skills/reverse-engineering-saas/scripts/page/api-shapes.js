@@ -42,15 +42,32 @@
         if (/^\d+$/.test(segment)) return ':id';
         if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(segment)) return ':id';
         if (/\d/.test(segment) && segment.length >= 6 && /^[\w-]+$/.test(segment)) return ':id';
+        // Same rule as inventory.js: emails, encoded text and long segments are data, not routes.
+        if (segment.length > 32 || /%|@|\s/.test(segment)) return ':value';
         return segment;
       })
       .join('/');
+
+  // Object keys are copied into the shape, so a key that looks like data (an email, a name,
+  // an ID) would leak. Such keys collapse into one '<key>' entry.
+  const keyLooksLikeData = (key) =>
+    !/^[A-Za-z_$][\w$.-]{0,60}$/.test(key) || /@/.test(key) || /\d{3,}/.test(key) ||
+    /^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(key);
+  // A dictionary keyed by records ({ "<id or name>": {...}, ... }): several keys whose values
+  // are all objects with the same key set. Its keys are data even when they look like words.
+  const looksLikeDictionary = (value, keys) => {
+    if (keys.length < 5) return false;
+    const signature = (item) => (item && typeof item === 'object' && !Array.isArray(item) ? Object.keys(item).sort().join(',') : null);
+    const first = signature(value[keys[0]]);
+    return first !== null && first !== '' && keys.every((key) => signature(value[key]) === first);
+  };
+  const DATA_KEY = '<key>';
 
   const templateUrl = (raw) => {
     try {
       const url = new URL(raw, location.href);
       const host = url.origin === location.origin ? '' : `${url.protocol}//${url.host}`;
-      const query = [...new Set(url.searchParams.keys())].sort();
+      const query = [...new Set([...url.searchParams.keys()].map((key) => (keyLooksLikeData(key) ? DATA_KEY : key)))].sort();
       return `${host}${templatePath(url.pathname)}${query.length ? `?${query.join('&')}` : ''}`;
     } catch {
       return String(raw).slice(0, 200);
@@ -89,15 +106,24 @@
       if (depth >= MAX_DEPTH) return '{…}';
       const out = {};
       const keys = Object.keys(value);
+      const dictionary = looksLikeDictionary(value, keys);
+      let dataKeys = 0;
       for (const key of keys.slice(0, MAX_KEYS)) {
         const child = value[key];
+        if (dictionary || keyLooksLikeData(key)) {
+          dataKeys += 1;
+          // Merge every data-keyed value into one shape; never sample enums under a data key.
+          out[DATA_KEY] = mergeShapes(out[DATA_KEY], shapeOf(child, depth + 1, `${path}.${DATA_KEY}`, null));
+          continue;
+        }
         if (enums && re.api?.enumSamples !== false && typeof child === 'string' && ENUM_KEY.test(key) && looksLikeEnum(child)) {
           const set = (enums[`${path}.${key}`] = enums[`${path}.${key}`] || new Set());
           if (set.size < MAX_ENUM_VALUES) set.add(child);
         }
         out[key] = shapeOf(child, depth + 1, `${path}.${key}`, enums);
       }
-      if (keys.length > MAX_KEYS) out['…'] = `${keys.length - MAX_KEYS} more keys`;
+      if (dataKeys) out['…keys'] = dictionary ? `dictionary of ${keys.length} entries` : `${dataKeys} data-like keys`;
+      if (!dictionary && keys.length > MAX_KEYS) out['…'] = `${keys.length - MAX_KEYS} more keys`;
       return out;
     }
     const hint = hintFor(value);

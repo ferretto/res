@@ -5,7 +5,7 @@
 // ledger without object IDs, locations or URLs, so the unzipped folder passes
 // check-kb and shows how the study left the product. No dependencies.
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deflateRawSync } from 'node:zlib';
@@ -92,15 +92,24 @@ function buildZip(entries) {
   return Buffer.concat([...parts, ...central, end]);
 }
 
+const skippedLinks = [];
+
 function walk(dir, root, skipDirs) {
   const files = [];
   for (const entry of readdirSync(dir).sort()) {
     if (ALWAYS_SKIP.has(entry)) continue;
     const full = join(dir, entry);
     const rel = relative(root, full);
-    if (statSync(full).isDirectory()) {
+    // lstat, not stat: a symbolic link could point outside the KB (a home folder, ~/.ssh)
+    // and its target would travel in a zip meant to be shared. Links are left out.
+    const info = lstatSync(full);
+    if (info.isSymbolicLink()) {
+      skippedLinks.push(rel);
+      continue;
+    }
+    if (info.isDirectory()) {
       if (!skipDirs.includes(rel)) files.push(...walk(full, root, skipDirs));
-    } else {
+    } else if (info.isFile()) {
       files.push(rel);
     }
   }
@@ -214,6 +223,7 @@ function main() {
   console.log(`Handoff: ${out}`);
   console.log(`${entries.length} files, ${(zip.length / 1024).toFixed(0)} KB.${skipped.length ? ` Left out: ${skipped.map((dir) => `${dir}/`).join(', ')} (use --full to include).` : ''}`);
   if (ledger) console.log(`Kept ${LEDGER} without object IDs, locations or URLs.`);
+  if (skippedLinks.length) console.log(`Left out ${skippedLinks.length} symbolic link(s): ${skippedLinks.join(', ')}`);
   if (check.status !== 0) console.log('Packed with --force: check-kb reported errors.');
   console.log(`Report: ${report}`);
   console.log('Send both files to the user: REPORT.html to read, the zip for any coding agent (start at BUILD.md).');

@@ -4,8 +4,8 @@
 // rendered from the knowledge base's Markdown. Images are embedded once as
 // base64 and reused by class; the only script is an inline theme toggle and
 // image zoom. No dependencies.
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const USAGE = 'Usage: node build-report.mjs <kb-dir> [--out <file.html>] [--help]';
@@ -18,7 +18,19 @@ const UNSEEN = /^\s*(not tested|not measured|not reached|not studied|not seen|no
 const GALLERY_LIMIT = 6;
 
 const escapeHtml = (text) => String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-const read = (kb, file) => (existsSync(join(kb, file)) ? readFileSync(join(kb, file), 'utf8') : '');
+// True when file (relative to the KB) resolves inside the KB, symbolic links included.
+// The report embeds what it reads, so nothing outside the KB may reach it.
+function insideKb(kb, file) {
+  if (!file || isAbsolute(file) || file === '..' || file.startsWith('../') || file.startsWith(`..${sep}`)) return false;
+  try {
+    const root = realpathSync(kb);
+    const real = realpathSync(join(kb, file));
+    return real === root || real.startsWith(root + sep);
+  } catch {
+    return false;
+  }
+}
+const read = (kb, file) => (existsSync(join(kb, file)) && insideKb(kb, file) ? readFileSync(join(kb, file), 'utf8') : '');
 // A comment on its own line goes with its line, so tables around it stay intact.
 const stripComments = (text) => text.replace(/^[ \t]*<!--[\s\S]*?-->[ \t]*\r?\n/gm, '').replace(/<!--[\s\S]*?-->/g, '');
 const listDir = (kb, dir, filter = () => true) =>
@@ -133,7 +145,7 @@ const evOf = (file) => (file ? basename(file).match(/^(EV-\d{3})/)?.[1] ?? null 
 function registerPic(ctx, file) {
   if (ctx.pics.has(file)) return ctx.pics.get(file);
   const ext = extname(file).toLowerCase();
-  if (!MIME[ext] || !existsSync(join(ctx.kb, file))) return null;
+  if (!MIME[ext] || !existsSync(join(ctx.kb, file)) || !insideKb(ctx.kb, file)) return null;
   const buf = readFileSync(join(ctx.kb, file));
   const [w, h] = imageSize(buf, ext);
   const pic = { cls: `p${ctx.pics.size + 1}`, w: w || 16, h: h || 10, uri: `data:${MIME[ext]};base64,${buf.toString('base64')}` };
